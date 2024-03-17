@@ -1,0 +1,237 @@
+**Spangled's simple thing i made** 
+<https://crackmes.one/crackme/65d70d386d3d2b1fef4be2ef>
+
+```
+im kinda new at this so dont judge if its bad or easy to crack please
+```
+
+# Challenge
+
+```
+$ file auth.exe
+auth.exe: PE32+ executable (console) x86-64, for MS Windows
+```
+
+If we look open the target in IDA, it's clearly packed somehow.  Looking at the semgments we see labels indicating UPX <https://upx.github.io/> was used:
+```
+C:\Users\charl\Desktop\upx>upx -d -o auth_unpacked.exe auth.exe
+                       Ultimate Packer for eXecutables
+                          Copyright (C) 1996 - 2024
+UPX 4.2.2       Markus Oberhumer, Laszlo Molnar & John Reiser    Jan 3rd 2024
+
+        File size         Ratio      Format      Name
+   --------------------   ------   -----------   -----------
+   1304064 <-    350720   26.89%    win64/pe     auth_unpacked.exe
+
+Unpacked 1 file.
+```
+
+```
+$ file auth_unpacked.exe
+auth_unpacked.exe: PE32+ executable (console) x86-64, for MS Windows
+```
+
+Prompt:
+```
+Enter license key: 1234567
+Invalid license key. Please try again.
+```
+
+# Diving in
+
+We can check in IDA for strings and can quickly find our promps and trace them back to the main function.  One of the first things we can notice is a simple debugger check:
+```
+.text:000000014000154A E8 61 AC 00 00 call    sub_14000C1B0
+.text:000000014000154F E8 CF FF FF FF call    sub_140001523
+.text:0000000140001554 84 C0          test    al, al
+.text:0000000140001556 74 44          jz      short no_debugger
+
+.text:0000000140001558 48 8D 05 A1 6A+lea     rax, aDebuggingDetec ; "Debugging detected. Exiting."
+```
+
+We can just patch jz to an unconditional jmp during testing:
+```
+.text:0000000140001556 EB 44          jmp     short no_debugger
+```
+
+After this is the main input and validation. We can play around with the debugger now and add some sensible labels:
+```
+.text:000000014000159C no_debugger:
+.text:000000014000159C lea     rax, [rbp+10h+license]
+.text:00000001400015A0 mov     rcx, rax
+.text:00000001400015A3 call    str_construct_empty
+.text:00000001400015A8 lea     rax, aEnterLicenseKe ; "Enter license key: "
+.text:00000001400015AF mov     rdx, rax
+.text:00000001400015B2 mov     rax, cs:stdout
+.text:00000001400015B9 mov     rcx, rax        ; Buffer
+.text:00000001400015BC call    puts
+.text:00000001400015C1 lea     rax, [rbp+10h+license]
+.text:00000001400015C5 mov     rdx, rax
+.text:00000001400015C8 mov     rax, cs:stdin
+.text:00000001400015CF mov     rcx, rax
+.text:00000001400015D2 call    read_string
+.text:00000001400015D7 lea     rax, [rbp+10h+license]
+.text:00000001400015DB mov     rcx, rax
+.text:00000001400015DE call    check_license
+.text:00000001400015E3 test    al, al
+.text:00000001400015E5 jz      short fail_path
+```
+
+Clearly **check_license** needs to return something non-zero, and we can look inside of it too:
+```
+.text:00000001400014F0 mov     [rbp+license], rcx
+.text:00000001400014F4 mov     rax, [rbp+license]
+.text:00000001400014F8 mov     rcx, rax
+.text:00000001400014FB call    hash_string
+.text:0000000140001500 mov     [rbp+var_8], rax
+.text:0000000140001504 mov     rax, 72689D891F5D8B97h
+.text:000000014000150E mov     [rbp+var_10], rax
+.text:0000000140001512 mov     rax, [rbp+var_8]
+.text:0000000140001516 cmp     rax, [rbp+var_10]
+.text:000000014000151A setz    al
+```
+
+So **hash_string** needs to turn the license into the constant it's compared against afterward.  Digging down into it, we can identify the one value that gets updated in a loop and eventually returned:
+```
+.text:000000014000145C mov     [rbp+hash_value], 1505h
+...
+.text:000000014000149A movzx   eax, byte ptr [rax]
+.text:000000014000149D mov     [rbp+cur_char], al
+.text:00000001400014A0 mov     rax, [rbp+hash_value]
+.text:00000001400014A4 shl     rax, 5                 ; hash * 32 dec
+.text:00000001400014A8 mov     rdx, rax
+.text:00000001400014AB mov     rax, [rbp+hash_value]
+.text:00000001400014AF add     rdx, rax               ; hash + hash * 32d = hash * 33d
+.text:00000001400014B2 movsx   rax, [rbp+cur_char]
+.text:00000001400014B7 add     rax, rdx
+.text:00000001400014BA mov     [rbp+hash_value], rax  ; hash = hash * 33d + cur_char
+```
+
+Where ```byte ptr [rax]``` reads the license character by character, and the final hash_value after iterating through every letter must be 72689D891F5D8B97h.
+
+This looks reasonably solvable.
+
+# Keygen
+
+Assuming we're limited to printable characters, we can establish a minimum and maximum length for our license:
+```
+# minmax_len.py
+
+hash = 0x1505
+length = 0
+
+while hash < 0x72689D891F5D8B97:
+    hash = hash * 33 + 0x7e    # '~', the largest printable char
+    length += 1
+
+print('min length: ', length)
+
+hash = 0x1505
+length = 0
+
+while True:
+    hash = hash * 33 + 0x20    # ' ', the smallest printable char
+
+    if hash > 0x72689D891F5D8B97:
+        break
+
+    length += 1
+
+print('max length: ', length)
+
+```
+
+We get:
+```
+min length:  10
+max length:  10
+```
+
+Which fixes our length at 10.  We'll just make z3 solve it:
+```
+# keygen.py
+
+import itertools
+from z3 import *
+
+LIC_LEN = 10
+FINAL_HASH = 0x72689D891F5D8B97
+
+# Find all models satisfying a given set of constraints
+def models(formula, max = 100):
+    " a generator of up to max models "
+    solver = Solver()
+    solver.add(formula)
+
+    count = 0
+    while count < max:
+        count +=1
+        
+        if solver.check() == sat:
+            model = solver.model()
+            yield model
+            
+            # exclude this model
+            block = []
+            for z3_decl in model: # FuncDeclRef
+                arg_domains = []
+                for i in range(z3_decl.arity()):
+                    domain, arg_domain = z3_decl.domain(i), []
+                    for j in range(domain.num_constructors()):
+                        arg_domain.append( domain.constructor(j) () )
+                    arg_domains.append(arg_domain)
+                for args in itertools.product(*arg_domains):
+                    block.append(z3_decl(*args) != model.eval(z3_decl(*args)))
+            solver.add(Or(block))
+
+# Init character and constraint lists
+flag = []
+F = []
+
+# Initial hash value
+hash = IntVal(int('0x1505', 16))
+
+# Create an unknown for each character
+for i in range(LIC_LEN):
+    # Create symbolic license chars
+    flag.append(Int(f'flag_{str(i).zfill(2)}'))
+
+    # Constrain our results to printable characters
+    F += [ flag[i] >= 0x20, flag[i] <= 0x7e ]
+
+    # Update our hash value
+    hash = hash * 33 + flag[i]
+
+# Setup our final hash constraint
+F += [hash == FINAL_HASH ]
+
+for m in models(F):
+    m_dict = {d.name():m[d].as_long() for d in m}
+    print(''.join([chr(m_dict[k]) for k in sorted(m_dict.keys())]))
+
+```
+
+Running this starts giving us some options:
+```
+4y1pysy492
+66Rpyu73Z2
+65tOytX3Xt
+65spytWU8S
+65spysy48S
+65spysy492
+65spysy47t
+65spyswv8S
+...
+```
+
+Which we can test in the original unmodified binary:
+```
+Enter license key: 4y1pysy492
+Congratulations! You've entered a valid license key.
+
+Enter license key: 66Rpyu73Z2
+Congratulations! You've entered a valid license key.
+...
+```
+
+Nice! QED

@@ -1,1 +1,3 @@
-same throw in ida check agains string nima:@
+programName[0] + commandline_ARG[0] must be == 110 ---> '.' + '@' = 110 
+solution rename exe to randomchar+nima
+eg: anima @

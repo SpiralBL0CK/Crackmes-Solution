@@ -1,0 +1,2 @@
+After running the program through x64dbg again and advancing through it until `enter flag: ` shows up, if we don't enter any value, we can see RCX holding the value `meilovecats`.
+enter meilovecats win

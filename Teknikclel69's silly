@@ -1,3 +1,6 @@
 open in ida 
-sys read on user input cmp against chinese baguette
-flag is chinese baguette
+compare function and show the value of the value of $edi which is compared to the value in $esi, which stores our input value.
+
+(gdb) x/s $edi
+0x804a018:      "chicken baguette\n"
+
